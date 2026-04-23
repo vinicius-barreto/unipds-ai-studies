@@ -2,13 +2,89 @@ import 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js';
 import { workerEvents } from '../events/constants.js';
 
 console.log('Model training worker initialized');
-let _globalCtx = {};
 
+// Normalize continuous values (price, age) to 0–1 range
+// Why? Keeps all features balanced so no one dominates training
+// Formula: (val - min) / (max - min)
+// Example: price=129.99, minPrice=39.99, maxPrice=199.99 → 0.56
+const normalize = (value, min, max) => (value - min) / ((max - min) || 1)
+
+function makeContext(catalog, users) {
+    const ages = users.map(u => u.age)
+    const prices = catalog.map(c => c.price)
+
+    const minAge = Math.min(...ages)
+    const maxAge = Math.max(...ages)
+
+    const minPrice = Math.min(...prices)
+    const maxPrice = Math.max(...prices)
+
+    const colors = [...new Set(catalog.map(c => c.color))]
+    const categories = [...new Set(catalog.map(c => c.category))]
+
+    const colorsIndex = Object.entries(
+        colors.map((color, index) => {
+            return [color, index]
+        })
+    )
+
+    const categoriesIndex = Object.entries(
+        categories.map((category, index) => {
+            return [category, index]
+        })
+    )
+
+    // calculate the average age of users (to personalize)
+    const middleAge = (minAge + maxAge) / 2
+    const ageSums = {}
+    const ageCounts = {}
+
+    users.forEach(user => {
+        user.purchases.forEach(purchase => {
+            ageSums[purchase.name] = (ageSums[purchase.name] || 0) + user.age
+            ageCounts[purchase.name] = (ageCounts[purchase.name] || 0) + 1
+        })
+    })
+
+    const normalizedProductAverageAge = Object.fromEntries(
+        catalog.map(product => {
+            const avg = ageCounts[product.name] ? 
+            ageSums[product.name] / ageCounts[product.name] : 
+            middleAge
+
+            return [product.name, normalize(avg, minAge, maxAge)]
+        })
+    )
+
+    // return the tensor
+    return {
+        catalog,
+        users, 
+        colorsIndex,
+        categoriesIndex,
+        minAge,
+        maxAge,
+        minPrice,
+        maxPrice,
+        numberOfCategories: categories.length,
+        numberOfColors: colors.length,
+        // (price + age) + categories + colors
+        dimensions: 2 + categories.length + colors.length
+    }
+    
+}
 
 async function trainModel({ users }) {
     console.log('Training model with users:', users)
 
     postMessage({ type: workerEvents.progressUpdate, progress: { progress: 50 } });
+
+    const catalog = await((await fetch('/data/products.json'))).json()
+    const context = makeContext(catalog, users)
+
+    debugger
+
+
     postMessage({
         type: workerEvents.trainingLog,
         epoch: 1,
