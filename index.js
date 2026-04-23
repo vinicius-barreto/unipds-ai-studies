@@ -119,7 +119,7 @@ const outputYs = tf.tensor2d(tensorLabels)
 
 // quanto mais dado melhor!
 // assim o algoritmo consegue entender melhor os padrões complexos
-// dos dados 
+// dos dados
 const model = await trainModel(inputXs, outputYs)
 
 const person = { nome: 'Ana', idade: 32, cor: 'verde', localizacao: "Sao Paulo" }
