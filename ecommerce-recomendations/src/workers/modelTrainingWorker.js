@@ -4,7 +4,7 @@ import { workerEvents } from '../events/constants.js';
 console.log('Model training worker initialized');
 
 let _globalCtx = {}
-let _model = {}
+let _model = null
 
 const WEIGHTS = {
     category: 0.4,
@@ -134,6 +134,18 @@ function encodeUser(user, context) {
             context.dimensions
         ])
     }
+
+    return tf.concat1d(
+        [
+            tf.zeros([1]), //price is ignored,
+            tf.tensor1d([
+                normalize(user.age, context.minAge, context.maxAge) 
+                * WEIGHTS.age
+            ]),
+            tf.zeros([context.numberOfCategories]), // category ignored
+            tf.zeros([context.numberOfColors]) // color ignored
+        ]
+    ).reshape([1, context.dimensions])
 }
 
 function createTrainingData(context) {
@@ -219,6 +231,8 @@ async function configureAndTrainNeuralNetwork(trainData) {
         }
     })
 
+    return model
+
 }
 
 async function trainModel({ users }) {
@@ -246,12 +260,62 @@ async function trainModel({ users }) {
 }
 
 function recommend(user, ctx) {
-    console.log('will recommend for user:', user)
-    // postMessage({
-    //     type: workerEvents.recommend,
-    //     user,
-    //     recommendations: []
-    // });
+    if(!_model) return;
+
+    const context = _globalCtx
+
+    // Step 1
+    // Convert the given user into a codified vector of features
+    // price ignored, age normalized, categories normalized
+    // transform the user info into a same numeric format that was used to train the model
+
+    const userVector = encodeUser(user, _globalCtx).dataSync()
+
+    // In real applications
+    // Store all product vectors into a vetorial database (such as postgreSQL, Neo4J or Pinecone)
+    // Consult: Find the 200 nearest products from user vector
+    //  Execute _model.predict() only for these products
+    
+    // Step 2
+    // Create entry pairs: for each product, concatenate the user vector
+    // with codified vector of product
+    // 
+    // Why? The model preview the "compatibility score" for each pair (user, product) 
+    const inputs = context.productVectors.map(({vector}) => {
+        return [...userVector, ...vector]
+    })
+
+    // Step 3
+    // Convert all pairs (user, product) in one single tensor
+    // Format: [numProducts, inputDimension]
+    const inputTensor = tf.tensor2d(inputs)
+
+    // Step 4
+    // Run the trained neural network in all pairs (user, product) at once
+    // the result is a score for each product between 0 and 1
+    // As bigger the score, higher the probability of user to want the product
+    const predictions = _model.predict(inputTensor)
+
+    // Step 5
+    // Extract the scores to a normal JS array
+    const scores = predictions.dataSync()
+    const recommendations = context.productVectors.map((item, index) => {
+        return {
+            ...item.meta,
+            name: item.name,
+            score: scores[index] // model prediction for this product
+        }
+    })
+
+    const sortedItems = recommendations.sort((a, b) => b.score - a.score)
+
+    // Step 8
+    // Send the sorted product list of recommendations to the main thread (so UI can show it now)
+    postMessage({
+        type: workerEvents.recommend,
+        user,
+        recommendations: sortedItems
+    });
 }
 
 
